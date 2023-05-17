@@ -133,7 +133,8 @@ def main(keywords, sender, receiver):
 if __name__ == '__main__':
     with open('keywords.json', 'r') as kwf:
         kws = json.load(kwf)
-        main(kws, {'server': 'sender_smtp_server', 'port': 994,
-                   'user': 'sender_email_address', 'passwd': 'sender_password'},
-             'receiver_email_address')
+        with open('account.json', 'r') as accf:
+            acc = json.load(accf)
+            main(kws, acc["sender"],
+                 acc["receiver"])
     time.sleep(1)
