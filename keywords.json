@@ -1,0 +1,20 @@
+{
+  "title": [
+    ["Radio"],
+    ["VLBI"],
+    ["Interfero"],
+    ["Astrometry"],
+    ["Frame"],
+    ["Gaia"],
+    ["Mira"],
+    ["PLR"],
+    ["Period-Luminosity"]
+  ],
+  "subject": [
+    ["astro-ph", "cs.CV"],
+    ["astro-ph", "cs.LG"]
+  ],
+  "author": [
+    ["Reid"]
+  ]
+}
