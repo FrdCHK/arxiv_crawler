@@ -6,3 +6,4 @@ __pycache__/
 arxiv_selected.html
 llm_raw_output.log
 interest-*
+astro_ph_last7days.json
