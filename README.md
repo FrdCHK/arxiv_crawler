@@ -1,32 +1,46 @@
 # Arxiv_weekly
-A little crawler which can help you to get your own paper list from https://arxiv.org/ every week.
 
-The account information should be put in account.json (create by your own first):
+This script crawls arXiv weekly papers, scores title relevance with a local LLM
+(tested with `llama.cpp` server), keeps high-score papers, then optionally:
 
-    {
-      "sender": {
-        "server": "smtp server",
-        "port": 994,
-        "user": "email address",
-        "passwd": "password"
-      },
-      "receiver": "email address"
-    }
+- saves selected papers to an HTML file
+- sends the same HTML content by email
 
-The keywords should be put in keywords.json, an example is available:
+## Files
 
-    {
-      "title": [
-        ["A"],
-        ["B"]
-      ],
-      "subject": [
-        ["C", "D"],
-        ["E", "F"]
-      ],
-      "author": [
-        ["G"]
-      ]
-    }
+- `weekly_arXiv.py`: main script
+- `settings.yaml`: runtime config
+- `interest.txt`: plain-text description of your research interests
+- `account.json`: email account config (required only when `send_email: true`)
 
-in which, the logical operation is: (A|B)|((C&D)|(E&F))|G
+## Settings
+
+`settings.yaml` controls:
+
+- arXiv list URL
+- arXiv time window (`arxiv.recent_days`, e.g. `2` for recent 2 days)
+- local LLM endpoint/model (`http://127.0.0.1:8080/v1` by default)
+- relevance threshold (`selection.threshold`)
+- output toggles (`output.save_html`, `output.send_email`)
+
+## Email config
+
+Create `account.json`:
+
+```json
+{
+  "sender": {
+    "server": "smtp server",
+    "port": 994,
+    "user": "email address",
+    "passwd": "password"
+  },
+  "receiver": "email address"
+}
+```
+
+## Run
+
+```bash
+python weekly_arXiv.py
+```

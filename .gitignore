@@ -1,3 +1,8 @@
 account.json
 .idea/*
 .vscode/*
+__pycache__/
+.codex
+arxiv_selected.html
+llm_raw_output.log
+interest-*
