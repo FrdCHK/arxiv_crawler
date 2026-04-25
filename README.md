@@ -1,6 +1,6 @@
-# Arxiv_weekly
+# AI-driven arXiv crawler
 
-This script crawls arXiv weekly papers, scores title relevance with a local LLM
+This script crawls recent arXiv papers, scores title relevance with a local LLM
 (tested with `llama.cpp` server), keeps high-score papers, then optionally:
 
 - saves selected papers to an HTML file
