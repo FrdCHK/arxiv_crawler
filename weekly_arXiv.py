@@ -26,15 +26,15 @@ DEFAULT_SETTINGS = {
     "llm": {
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "local-model",
-        "timeout_sec": 120,
-        "batch_size": 1,
+        "timeout_sec": 240,
+        "batch_size": 5,
         "temperature": 0.0,
-        "max_tokens": 5000,
+        "max_tokens": 100000,
         "log_raw_response": False,
         "raw_response_log_file": "llm_raw_output.log",
     },
     "selection": {
-        "threshold": 50,
+        "threshold": 40,
     },
     "output": {
         "save_html": True,

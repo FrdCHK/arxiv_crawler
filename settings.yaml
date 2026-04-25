@@ -1,7 +1,7 @@
 arxiv:
   url: "https://arxiv.org/list/astro-ph/pastweek?show=1000"
   # Keep papers from the latest 1-7 arXiv listing days (e.g. 2 = recent 2 days)
-  recent_days: 2
+  recent_days: 7
 
 # Keep this name if you want to match current script default.
 # The script also falls back to interest.txt if interst.txt is missing.
@@ -12,17 +12,17 @@ llm:
   base_url: "http://127.0.0.1:8080/v1"
   # Replace with your own model name
   model: "bigatuna/Qwen3.5-9b-Sushi-Coder-RL-GGUF:Q8_0"
-  timeout_sec: 240
-  batch_size: 25
+  timeout_sec: 600
+  batch_size: 5
   temperature: 0.0
-  max_tokens: 6000
+  max_tokens: 100000
   # If true, append every raw model response to the log file below.
   log_raw_response: false
   raw_response_log_file: "llm_raw_output.log"
 
 selection:
   # Keep papers with score >= threshold
-  threshold: 60
+  threshold: 40
 
 output:
   save_html: true
