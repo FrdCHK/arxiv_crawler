@@ -4,11 +4,11 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
+import xml.etree.ElementTree as ET
 
 import requests
 import smtplib
 import yaml
-from bs4 import BeautifulSoup
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -16,7 +16,10 @@ from email.mime.text import MIMEText
 
 DEFAULT_SETTINGS = {
     "arxiv": {
-        "url": "https://arxiv.org/list/astro-ph/pastweek?show=1000",
+        "api_url": "http://export.arxiv.org/api/query",
+        "category": "astro-ph*",
+        "max_results": 2000,
+        "user_agent": "arxiv crawler (research project; contact: your_email@example.com)",
         "recent_days": 7,
     },
     "interest_file": "interst.txt",
@@ -24,14 +27,14 @@ DEFAULT_SETTINGS = {
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "local-model",
         "timeout_sec": 120,
-        "batch_size": 25,
+        "batch_size": 1,
         "temperature": 0.0,
-        "max_tokens": 600,
+        "max_tokens": 5000,
         "log_raw_response": False,
         "raw_response_log_file": "llm_raw_output.log",
     },
     "selection": {
-        "threshold": 70,
+        "threshold": 50,
     },
     "output": {
         "save_html": True,
@@ -71,62 +74,74 @@ def load_interest(path):
     return p.read_text(encoding="utf-8").strip()
 
 
-def get_one_page(url):
-    response = requests.get(url, timeout=30)
-    print(response.status_code)
-    if response.status_code == 200:
-        return response.text
-    raise RuntimeError(f"failed to fetch arXiv page: {url}, status={response.status_code}")
-
-
 def clean_text(raw):
     return " ".join(raw.replace("\n", " ").split())
 
 
-def normalize_arxiv_date(raw_date_text):
-    # arXiv headers may look like:
-    # "Thu, 23 Apr 2026 (showing 79 of 79 entries )"
-    # Keep only the canonical "Thu, 23 Apr 2026" part.
-    clean = clean_text(raw_date_text)
-    matched = re.match(r"^[A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}", clean)
-    if not matched:
-        raise ValueError(f"unexpected arXiv date format: {clean}")
-    return matched.group(0)
+def format_arxiv_api_date(dt):
+    return dt.strftime("%Y%m%d%H%M")
 
 
-def parse_arxiv_week(url):
-    html = get_one_page(url)
-    soup = BeautifulSoup(html, features="html.parser")
-    contents = soup.find_all("dl")
-    dates = soup.find_all("h3")
+def parse_arxiv_recent(arxiv_cfg):
+    end_date = datetime.utcnow()
+    recent_days = max(int(arxiv_cfg.get("recent_days", 7)), 1)
+    start_date = end_date - timedelta(days=recent_days)
+
+    query = (
+        f'cat:{arxiv_cfg.get("category", "astro-ph*")} '
+        f'AND submittedDate:[{format_arxiv_api_date(start_date)} TO {format_arxiv_api_date(end_date)}]'
+    )
+    params = {
+        "search_query": query,
+        "start": 0,
+        "max_results": int(arxiv_cfg.get("max_results", 2000)),
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+    }
+    headers = {"User-Agent": arxiv_cfg.get("user_agent", DEFAULT_SETTINGS["arxiv"]["user_agent"])}
+    api_url = arxiv_cfg.get("api_url", DEFAULT_SETTINGS["arxiv"]["api_url"])
+
+    resp = requests.get(api_url, params=params, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    root = ET.fromstring(resp.text)
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
     rows = []
+    for entry in root.findall("atom:entry", ns):
+        paper_url = entry.findtext("atom:id", default="", namespaces=ns).strip()
+        paper_id = paper_url.split("/")[-1]
+        title = clean_text(entry.findtext("atom:title", default="", namespaces=ns))
+        abstract = clean_text(entry.findtext("atom:summary", default="", namespaces=ns))
+        author_split = [
+            clean_text(author.findtext("atom:name", default="", namespaces=ns))
+            for author in entry.findall("atom:author", ns)
+            if author.findtext("atom:name", default="", namespaces=ns).strip()
+        ]
+        subject_split = []
+        for category in entry.findall("atom:category", ns):
+            term = (category.attrib.get("term") or "").strip()
+            if term and term not in subject_split:
+                subject_split.append(term)
+        published_text = entry.findtext("atom:published", default="", namespaces=ns).strip()
+        if published_text:
+            date_dt = datetime.strptime(published_text, "%Y-%m-%dT%H:%M:%SZ")
+        else:
+            date_dt = end_date
 
-    for i, block in enumerate(contents):
-        list_ids = block.find_all("a", title="Abstract")
-        list_title = block.find_all("div", class_="list-title mathjax")
-        list_authors = block.find_all("div", class_="list-authors")
-        list_subjects = block.find_all("div", class_="list-subjects")
-        date_text = normalize_arxiv_date(dates[i].text)
-        date_dt = datetime.strptime(date_text, "%a, %d %b %Y")
-
-        for pid, ptitle, pauthors, psubjects in zip(list_ids, list_title, list_authors, list_subjects):
-            paper_id = clean_text(pid.text).replace("arXiv:", "")
-            title = clean_text(ptitle.text).replace("Title: ", "")
-            authors = clean_text(pauthors.text).replace("Authors:", "")
-            subjects = clean_text(psubjects.text).replace("Subjects:", "")
-            rows.append(
-                {
-                    "date": date_text,
-                    "datetime": date_dt,
-                    "id": paper_id,
-                    "title": title,
-                    "authors": authors,
-                    "author_split": [a.strip() for a in authors.split(",") if a.strip()],
-                    "subjects": subjects,
-                    "subject_split": [s.strip() for s in subjects.split(";") if s.strip()],
-                }
-            )
-    print(f"get paper success, count={len(rows)}")
+        rows.append(
+            {
+                "date": date_dt.strftime("%a, %d %b %Y"),
+                "datetime": date_dt,
+                "id": paper_id,
+                "title": title,
+                "abstract": abstract,
+                "authors": ", ".join(author_split),
+                "author_split": author_split,
+                "subjects": "; ".join(subject_split),
+                "subject_split": subject_split,
+            }
+        )
+    print(f"get paper success by API, query='{query}', count={len(rows)}")
     return rows
 
 
@@ -208,20 +223,26 @@ def score_papers_with_llm(papers, interest_text, settings):
         "/no_think "
         "Do not output reasoning, explanation, or chain-of-thought. "
         "You are a strict scientific paper relevance scorer. "
-        "Given a user's research interest and arXiv titles, return ONLY JSON array. "
-        "Each item MUST have keys: id (string), relevance_score (0-100 integer). "
-        "Score high only if the title is directly useful to the user's stated interests."
+        "Given a user's research interest and arXiv title+abstract pairs, return ONLY JSON array. "
+        "Each item MUST have keys: id (string), relevance_score (0-100 integer), reason (string). "
+        "The reason must be 50-100 words and include both a brief summary and why this score is assigned. "
+        "Score each paper independently. "
+        "Score high if the paper is directly useful to the user's stated interests."
     )
 
     for start in range(0, len(papers), batch_size):
         batch = papers[start : start + batch_size]
-        titles = [{"id": row["id"], "title": row["title"]} for row in batch]
+        paper_inputs = [
+            {"id": row["id"], "title": row["title"], "abstract": row.get("abstract", "")}
+            for row in batch
+        ]
         user_prompt = (
             f"User interest:\n{interest_text}\n\n"
-            "Paper titles:\n"
-            f"{json.dumps(titles, ensure_ascii=False, indent=2)}\n\n"
+            "Paper title+abstract:\n"
+            f"{json.dumps(paper_inputs, ensure_ascii=False, indent=2)}\n\n"
             "Return only JSON array with one object per input paper, same order. "
-            'Output format: [{"id":"...", "relevance_score": 0}]. '
+            'Output format: [{"id":"...", "relevance_score": 0, "reason":"..."}]. '
+            "The reason must be 50-100 words. "
             "No extra keys. No prose."
         )
         payload = {
@@ -253,8 +274,9 @@ def score_papers_with_llm(papers, interest_text, settings):
             try:
                 pid = str(item["id"]).strip()
                 score = int(item["relevance_score"])
+                reason = str(item.get("reason", "")).strip()
                 if 0 <= score <= 100:
-                    score_map[pid] = {"relevance_score": score}
+                    score_map[pid] = {"relevance_score": score, "reason": reason}
             except (KeyError, ValueError, TypeError):
                 continue
         print(f"llm scored {min(start + batch_size, len(papers))}/{len(papers)} papers")
@@ -265,6 +287,7 @@ def score_papers_with_llm(papers, interest_text, settings):
         scored = dict(paper)
         match = score_map.get(paper["id"], {})
         scored["relevance_score"] = int(match.get("relevance_score", 0))
+        scored["reason"] = str(match.get("reason", "")).strip()
         merged.append(scored)
     return merged
 
@@ -276,15 +299,19 @@ def build_html(selected_papers, threshold):
 
     papers_gr = defaultdict(list)
     for item in selected_papers:
-        papers_gr[item["datetime"]].append(item)
+        # Group by calendar day rather than full timestamp.
+        papers_gr[item["datetime"].date()].append(item)
     for date in sorted(papers_gr.keys(), reverse=True):
         gr = papers_gr[date]
-        msg += f"<h3>{date.year}-{date.month}-{date.day}</h3>\n<ol>\n"
+        msg += f"<h3>{date.strftime('%Y-%m-%d')}</h3>\n<ol>\n"
         for item in gr:
             msg += (
                 f'<li><b>Title:</b> <a href="https://arxiv.org/abs/{item["id"]}">{item["title"]}</a><br/>'
                 f'<b>Relevance:</b> {item["relevance_score"]}/100'
             )
+            reason = str(item.get("reason", "")).strip()
+            if reason:
+                msg += "<br/><b>Reason:</b> " + reason
             msg += "<br/><b>Authors:</b> " + ", ".join(item["author_split"])
             msg += "<br/><b>Subjects:</b> " + ", ".join(item["subject_split"])
             msg += "</li>\n"
@@ -309,7 +336,7 @@ def send_email(sender, receiver, html_content):
 def main():
     settings = load_settings("settings.yaml")
     interest_text = load_interest(settings["interest_file"])
-    papers = parse_arxiv_week(settings["arxiv"]["url"])
+    papers = parse_arxiv_recent(settings["arxiv"])
     papers = filter_papers_by_recent_days(papers, settings["arxiv"].get("recent_days", 7))
 
     scored_papers = score_papers_with_llm(papers, interest_text, settings)
