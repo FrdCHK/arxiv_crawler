@@ -1,10 +1,10 @@
 import json
 import re
+import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
-import xml.etree.ElementTree as ET
 
 import requests
 import smtplib
@@ -15,14 +15,16 @@ from email.mime.text import MIMEText
 
 
 DEFAULT_SETTINGS = {
-    "arxiv": {
-        "api_url": "http://export.arxiv.org/api/query",
-        "category": "astro-ph*",
-        "max_results": 2000,
-        "user_agent": "arxiv crawler (research project; contact: your_email@example.com)",
+    "user": {
+        "name": "default",
+    },
+    "data": {
+        "database": {
+            "path": "data/arxiv.db",
+        },
         "recent_days": 7,
     },
-    "interest_file": "interst.txt",
+    "interest": "",
     "llm": {
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "local-model",
@@ -34,11 +36,12 @@ DEFAULT_SETTINGS = {
         "raw_response_log_file": "llm_raw_output.log",
     },
     "selection": {
-        "threshold": 40,
+        "threshold": 30,
     },
     "output": {
         "save_html": True,
-        "html_file": "arxiv_selected.html",
+        "output_dir": "output",
+        "html_file": "arxiv_selected_{user}_{date}.html",
         "send_email": False,
     },
 }
@@ -53,115 +56,84 @@ def deep_update(base, updates):
     return base
 
 
-def load_settings(path="settings.yaml"):
+def load_one_settings(path):
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
-    settings_path = Path(path)
-    if settings_path.exists():
-        with settings_path.open("r", encoding="utf-8") as f:
-            user_settings = yaml.safe_load(f) or {}
-        deep_update(settings, user_settings)
+    p = Path(path)
+    if p.suffix.lower() == ".json":
+        user_settings = json.loads(p.read_text(encoding="utf-8"))
+    else:
+        user_settings = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    deep_update(settings, user_settings)
+
+    interest_text = str(settings.get("interest", "")).strip()
+    if not interest_text:
+        raise ValueError(f"missing required 'interest' in settings file: {p}")
+
+    if not settings["user"].get("name"):
+        settings["user"]["name"] = p.stem
     return settings
 
 
-def load_interest(path):
-    p = Path(path)
-    if not p.exists() and p.name == "interst.txt":
-        fallback = p.with_name("interest.txt")
-        if fallback.exists():
-            p = fallback
-    if not p.exists():
-        raise FileNotFoundError(f"interest file not found: {path}")
-    return p.read_text(encoding="utf-8").strip()
-
-
 def clean_text(raw):
-    return " ".join(raw.replace("\n", " ").split())
+    return " ".join(str(raw or "").replace("\n", " ").split())
 
 
-def format_arxiv_api_date(dt):
-    return dt.strftime("%Y%m%d%H%M")
+def parse_iso_datetime(text):
+    return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ")
 
 
-def parse_arxiv_recent(arxiv_cfg):
-    end_date = datetime.utcnow()
-    recent_days = max(int(arxiv_cfg.get("recent_days", 7)), 1)
-    start_date = end_date - timedelta(days=recent_days)
+def load_papers_from_db(db_path, recent_days):
+    db_file = Path(db_path)
+    if not db_file.exists():
+        raise FileNotFoundError(f"database not found: {db_file}")
 
-    query = (
-        f'cat:{arxiv_cfg.get("category", "astro-ph*")} '
-        f'AND submittedDate:[{format_arxiv_api_date(start_date)} TO {format_arxiv_api_date(end_date)}]'
-    )
-    params = {
-        "search_query": query,
-        "start": 0,
-        "max_results": int(arxiv_cfg.get("max_results", 2000)),
-        "sortBy": "submittedDate",
-        "sortOrder": "descending",
-    }
-    headers = {"User-Agent": arxiv_cfg.get("user_agent", DEFAULT_SETTINGS["arxiv"]["user_agent"])}
-    api_url = arxiv_cfg.get("api_url", DEFAULT_SETTINGS["arxiv"]["api_url"])
+    now_utc_date = datetime.now(timezone.utc).date()
+    recent_days = max(int(recent_days), 1)
+    start_date = now_utc_date - timedelta(days=recent_days)
+    start_time_str = f"{start_date.strftime('%Y-%m-%d')}T00:00:00Z"
 
-    resp = requests.get(api_url, params=params, headers=headers, timeout=30)
-    resp.raise_for_status()
+    conn = sqlite3.connect(str(db_file))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                id, title, abstract, author_split_json, subject_split_json,
+                published, updated, arxiv_url
+            FROM papers
+            WHERE published >= ?
+            ORDER BY published DESC, id DESC
+            """,
+            (start_time_str,),
+        ).fetchall()
+    finally:
+        conn.close()
 
-    root = ET.fromstring(resp.text)
-    ns = {"atom": "http://www.w3.org/2005/Atom"}
-    rows = []
-    for entry in root.findall("atom:entry", ns):
-        paper_url = entry.findtext("atom:id", default="", namespaces=ns).strip()
-        paper_id = paper_url.split("/")[-1]
-        title = clean_text(entry.findtext("atom:title", default="", namespaces=ns))
-        abstract = clean_text(entry.findtext("atom:summary", default="", namespaces=ns))
-        author_split = [
-            clean_text(author.findtext("atom:name", default="", namespaces=ns))
-            for author in entry.findall("atom:author", ns)
-            if author.findtext("atom:name", default="", namespaces=ns).strip()
-        ]
-        subject_split = []
-        for category in entry.findall("atom:category", ns):
-            term = (category.attrib.get("term") or "").strip()
-            if term and term not in subject_split:
-                subject_split.append(term)
-        published_text = entry.findtext("atom:published", default="", namespaces=ns).strip()
-        if published_text:
-            date_dt = datetime.strptime(published_text, "%Y-%m-%dT%H:%M:%SZ")
-        else:
-            date_dt = end_date
+    papers = []
+    for row in rows:
+        published = str(row["published"] or "").strip()
+        published_dt = parse_iso_datetime(published) if published else datetime.utcnow()
 
-        rows.append(
+        author_split = [clean_text(a) for a in json.loads(row["author_split_json"] or "[]")]
+        subject_split = [clean_text(s) for s in json.loads(row["subject_split_json"] or "[]")]
+
+        papers.append(
             {
-                "date": date_dt.strftime("%a, %d %b %Y"),
-                "datetime": date_dt,
-                "id": paper_id,
-                "title": title,
-                "abstract": abstract,
+                "date": published_dt.strftime("%a, %d %b %Y"),
+                "datetime": published_dt,
+                "id": clean_text(row["id"]),
+                "title": clean_text(row["title"]),
+                "abstract": clean_text(row["abstract"]),
                 "authors": ", ".join(author_split),
                 "author_split": author_split,
                 "subjects": "; ".join(subject_split),
                 "subject_split": subject_split,
             }
         )
-    print(f"get paper success by API, query='{query}', count={len(rows)}")
-    return rows
 
-
-def filter_papers_by_recent_days(papers, recent_days):
-    if not papers:
-        return papers
-    if recent_days is None:
-        return papers
-    recent_days = int(recent_days)
-    if recent_days <= 0:
-        return papers
-
-    latest_dt = max(p["datetime"] for p in papers)
-    cutoff = latest_dt - timedelta(days=recent_days - 1)
-    filtered = [p for p in papers if p["datetime"] >= cutoff]
-    print(
-        f"time filter success, recent_days={recent_days}, "
-        f"latest={latest_dt.strftime('%Y-%m-%d')}, kept={len(filtered)}/{len(papers)}"
-    )
-    return filtered
+    label = f"{start_date.strftime('%Y-%m-%d')}..{now_utc_date.strftime('%Y-%m-%d')} UTC (by published)"
+    print(f"loaded papers from db: {db_file}, recent_days={recent_days}, count={len(papers)}")
+    return papers, label
 
 
 def extract_json(text):
@@ -173,7 +145,6 @@ def extract_json(text):
     clean = re.sub(r"^```(?:json)?", "", clean).strip()
     clean = re.sub(r"```$", "", clean).strip()
 
-    # 1) Try raw content directly
     try:
         parsed = json.loads(clean)
         if isinstance(parsed, list):
@@ -187,7 +158,6 @@ def extract_json(text):
     except json.JSONDecodeError:
         pass
 
-    # 2) Try extracting JSON array block
     array_match = re.search(r"\[\s*{.*}\s*\]", clean, flags=re.DOTALL)
     if array_match:
         try:
@@ -195,7 +165,6 @@ def extract_json(text):
         except json.JSONDecodeError:
             pass
 
-    # 3) Try extracting any object and look for common list keys
     obj_match = re.search(r"\{.*\}", clean, flags=re.DOTALL)
     if obj_match:
         try:
@@ -258,11 +227,13 @@ def score_papers_with_llm(papers, interest_text, settings):
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
+
         if log_raw:
             with raw_log_file.open("a", encoding="utf-8") as f:
                 f.write(f"=== batch start: {start}, size: {len(batch)} ===\n")
                 f.write((content or "") + "\n\n")
             print(f"logged raw LLM output for batch starting at {start} -> {raw_log_file}")
+
         scored_list = extract_json(content)
         if not scored_list:
             print(f"warning: could not parse JSON for batch starting at {start}.")
@@ -292,15 +263,18 @@ def score_papers_with_llm(papers, interest_text, settings):
     return merged
 
 
-def build_html(selected_papers, threshold):
-    msg = f"<h2>arXiv recent papers (AI-selected, threshold >= {threshold})</h2>"
+def build_html(selected_papers, threshold, user_name, source_label):
+    msg = (
+        f"<h2>arXiv papers (AI-selected, threshold >= {threshold})</h2>"
+        f"<p>User: <b>{user_name}</b> | Data window: <b>{source_label}</b></p>"
+    )
     if not selected_papers:
         return msg + "<p>No papers passed the threshold.</p>"
 
     papers_gr = defaultdict(list)
     for item in selected_papers:
-        # Group by calendar day rather than full timestamp.
         papers_gr[item["datetime"].date()].append(item)
+
     for date in sorted(papers_gr.keys(), reverse=True):
         gr = papers_gr[date]
         msg += f"<h3>{date.strftime('%Y-%m-%d')}</h3>\n<ol>\n"
@@ -324,7 +298,7 @@ def send_email(sender, receiver, html_content):
     multi_part.attach(MIMEText(html_content, "html", "utf-8"))
     multi_part["From"] = sender["user"]
     multi_part["To"] = receiver
-    multi_part["Subject"] = Header("arXiv this week", "utf-8")
+    multi_part["Subject"] = Header("arXiv daily screening", "utf-8")
 
     smtp = smtplib.SMTP_SSL(host=sender["server"], port=sender["port"])
     smtp.login(sender["user"], sender["passwd"])
@@ -333,27 +307,38 @@ def send_email(sender, receiver, html_content):
     print("send email success")
 
 
-def main():
-    settings = load_settings("settings.yaml")
-    interest_text = load_interest(settings["interest_file"])
-    papers = parse_arxiv_recent(settings["arxiv"])
-    papers = filter_papers_by_recent_days(papers, settings["arxiv"].get("recent_days", 7))
+def resolve_output_html_path(output_cfg, user_name):
+    output_dir = Path(output_cfg.get("output_dir", "output"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pattern = output_cfg.get("html_file", "arxiv_selected_{user}_{date}.html")
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fname = pattern.format(user=user_name, date=today_utc)
+    return output_dir / fname
 
-    scored_papers = score_papers_with_llm(papers, interest_text, settings)
+
+def run_for_settings_file(settings_path):
+    settings = load_one_settings(settings_path)
+    user_name = settings["user"]["name"]
+
+    db_path = settings["data"]["database"]["path"]
+    recent_days = settings["data"].get("recent_days", 7)
+    papers, source_label = load_papers_from_db(db_path, recent_days)
+
+    scored_papers = score_papers_with_llm(papers, settings["interest"], settings)
     threshold = int(settings["selection"]["threshold"])
     selected_papers = [
         p for p in scored_papers if int(p.get("relevance_score", 0)) >= threshold
     ]
     selected_papers.sort(key=lambda p: (p["datetime"], p["relevance_score"]), reverse=True)
-    print(f"selection success, selected={len(selected_papers)}")
+    print(f"[{user_name}] selection success, selected={len(selected_papers)}")
 
-    html_msg = build_html(selected_papers, threshold)
+    html_msg = build_html(selected_papers, threshold, user_name, source_label)
 
     output_cfg = settings["output"]
     if output_cfg.get("save_html", False):
-        html_path = Path(output_cfg.get("html_file", "arxiv_selected.html"))
+        html_path = resolve_output_html_path(output_cfg, user_name)
         html_path.write_text(html_msg, encoding="utf-8")
-        print(f"saved html: {html_path}")
+        print(f"[{user_name}] saved html: {html_path}")
 
     if output_cfg.get("send_email", False):
         with open("account.json", "r", encoding="utf-8") as accf:
@@ -361,9 +346,35 @@ def main():
         try:
             send_email(acc["sender"], acc["receiver"], html_msg)
         except smtplib.SMTPException:
-            print("error: email not sent!")
+            print(f"[{user_name}] error: email not sent!")
 
-    print("finished!")
+
+def iter_settings_files(settings_dir="settings"):
+    sdir = Path(settings_dir)
+    if not sdir.exists():
+        raise FileNotFoundError(f"settings directory not found: {sdir}")
+
+    files = sorted(
+        [
+            p
+            for p in sdir.iterdir()
+            if p.is_file() and p.suffix.lower() in {".yaml", ".yml", ".json"}
+        ]
+    )
+    if not files:
+        raise FileNotFoundError(f"no settings files found in: {sdir}")
+    return files
+
+
+def main():
+    settings_files = iter_settings_files("settings")
+    print(f"detected settings files: {len(settings_files)}")
+
+    for p in settings_files:
+        print(f"\n=== processing {p} ===")
+        run_for_settings_file(p)
+
+    print("\nfinished screening all users!")
 
 
 if __name__ == "__main__":

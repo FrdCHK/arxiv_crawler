@@ -3,7 +3,6 @@ account.json
 .vscode/*
 __pycache__/
 .codex
-arxiv_selected.html
+data/*
+output/*
 llm_raw_output.log
-interest-*
-astro_ph_last7days.json

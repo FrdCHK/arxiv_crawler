@@ -1,30 +1,18 @@
 arxiv:
-  url: "https://arxiv.org/list/astro-ph/pastweek?show=1000"
-  # Keep papers from the latest 1-7 arXiv listing days (e.g. 2 = recent 2 days)
-  recent_days: 7
+  api_url: "http://export.arxiv.org/api/query"
+  category: "astro-ph*"
+  max_results: 2000
+  user_agent: "arxiv auto bot (personal use; contact: zjd98@sina.cn)"
 
-# Keep this name if you want to match current script default.
-# The script also falls back to interest.txt if interst.txt is missing.
-interest_file: "interest.txt"
+download:
+  # Rolling window size for backfill/review-delay robustness.
+  lookback_days: 4
+  # Usually keep this as yesterday for cron.
+  anchor_date_utc: "yesterday"
 
-llm:
-  # Replace with your own url
-  base_url: "http://127.0.0.1:8080/v1"
-  # Replace with your own model name
-  model: "bigatuna/Qwen3.5-9b-Sushi-Coder-RL-GGUF:Q8_0"
-  timeout_sec: 600
-  batch_size: 5
-  temperature: 0.0
-  max_tokens: 100000
-  # If true, append every raw model response to the log file below.
-  log_raw_response: false
-  raw_response_log_file: "llm_raw_output.log"
+  database:
+    path: "data/arxiv.db"
 
-selection:
-  # Keep papers with score >= threshold
-  threshold: 40
-
-output:
-  save_html: true
-  html_file: "arxiv_selected.html"
-  send_email: false
+  # Optional compatibility output; can be disabled.
+  save_daily_json: true
+  data_dir: "data"
