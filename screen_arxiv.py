@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
         "output_dir": "output",
         "html_file": "arxiv_selected_{user}_{date}.html",
         "send_email": False,
+        "email_address": "",
     },
 }
 
@@ -341,15 +342,19 @@ def run_for_settings_file(settings_path):
         print(f"[{user_name}] saved html: {html_path}")
 
     if output_cfg.get("send_email", False):
+        receiver = str(output_cfg.get("email_address", "")).strip()
+        if not receiver:
+            print(f"[{user_name}] error: output.email_address is required when send_email=true")
+            return
         with open("account.json", "r", encoding="utf-8") as accf:
             acc = json.load(accf)
         try:
-            send_email(acc["sender"], acc["receiver"], html_msg)
+            send_email(acc["sender"], receiver, html_msg)
         except smtplib.SMTPException:
             print(f"[{user_name}] error: email not sent!")
 
 
-def iter_settings_files(settings_dir="settings"):
+def iter_settings_files(settings_dir="user_settings"):
     sdir = Path(settings_dir)
     if not sdir.exists():
         raise FileNotFoundError(f"settings directory not found: {sdir}")
@@ -367,8 +372,8 @@ def iter_settings_files(settings_dir="settings"):
 
 
 def main():
-    settings_files = iter_settings_files("settings")
-    print(f"detected settings files: {len(settings_files)}")
+    settings_files = iter_settings_files("user_settings")
+    print(f"detected user settings files: {len(settings_files)}")
 
     for p in settings_files:
         print(f"\n=== processing {p} ===")

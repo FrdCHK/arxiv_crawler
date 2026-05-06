@@ -14,10 +14,10 @@ arXiv visibility can lag submission (for example, Friday submissions may appear 
 - `download_arxiv_daily.py`: downloader + DB ingest
 - `screen_arxiv.py`: multi-user screening
 - `settings.yaml`: downloader config
-- `settings/`: per-user screening settings (`*.yaml`, `*.yml`, `*.json`)
+- `user_settings/`: per-user screening settings (`*.yaml`, `*.yml`, `*.json`)
 - `data/arxiv.db`: SQLite database (auto-created)
 - `data/*.json`: optional daily JSON snapshots (if enabled)
-- `account.json`: email account config (only if `send_email: true`)
+- `account.json`: SMTP sender account config (only if any user enables `send_email: true`)
 
 ## Downloader settings
 
@@ -41,9 +41,42 @@ Database behavior:
 
 ## Screening settings (per user)
 
-Each file in `settings/` should include an inline `interest` field.
+Each file in `user_settings/` should include an inline `interest` field.
 
-Example: `settings/user_example.yaml`.
+Example:
+
+```yaml
+user:
+  name: "example_user"
+
+data:
+  database:
+    path: "data/arxiv.db"
+  recent_days: 7
+
+interest: |
+  Describe your research interest here.
+
+llm:
+  base_url: "http://127.0.0.1:8080/v1"  # default local llama.cpp server
+  model: "bigatuna/Qwen3.5-9b-Sushi-Coder-RL-GGUF:Q8_0"  # replace with your LLM model name
+  timeout_sec: 240
+  batch_size: 5
+  temperature: 0.0
+  max_tokens: 10000
+  log_raw_response: false
+  raw_response_log_file: "llm_raw_output.log"
+
+selection:
+  threshold: 30
+
+output:
+  save_html: true
+  output_dir: "output"
+  html_file: "arxiv_selected_{user}_{date}.html"
+  send_email: false
+  email_address: ""
+```
 
 Important fields:
 
@@ -66,10 +99,14 @@ Create `account.json`:
     "port": 994,
     "user": "email address",
     "passwd": "password"
-  },
-  "receiver": "email address"
+  }
 }
 ```
+
+When a user enables email in `user_settings/*.yaml`, set:
+
+- `output.send_email: true`
+- `output.email_address: "receiver@example.com"`
 
 ## Run
 
@@ -79,7 +116,7 @@ Update DB daily:
 python download_arxiv_daily.py
 ```
 
-Run screening for all users under `settings/`:
+Run screening for all users under `user_settings/`:
 
 ```bash
 python screen_arxiv.py
@@ -89,4 +126,6 @@ A convenient way is to set up cron jobs for the two scripts, for example, run `d
 
 ## Acknowledgement
 
-Thank you to arXiv for use of its open access interoperability!
+Thank you to arXiv for use of its open access interoperability.
+
+LLM is used for the development of this repo.
