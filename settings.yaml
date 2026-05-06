@@ -9,6 +9,8 @@ download:
   lookback_days: 4
   # Usually keep this as yesterday for cron.
   anchor_date_utc: "yesterday"
+  # Wait time between requests for different UTC days.
+  request_interval_sec: 1.5
 
   database:
     path: "data/arxiv.db"

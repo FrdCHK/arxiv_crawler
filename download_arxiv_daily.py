@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -18,6 +19,7 @@ DEFAULT_DOWNLOAD_SETTINGS = {
     "download": {
         "lookback_days": 4,
         "anchor_date_utc": "yesterday",
+        "request_interval_sec": 1.5,
         "database": {
             "path": "data/arxiv.db",
         },
@@ -238,6 +240,7 @@ def main():
 
     lookback_days = max(int(download_cfg.get("lookback_days", 4)), 1)
     anchor_date = parse_anchor_date_utc(download_cfg.get("anchor_date_utc", "yesterday"))
+    request_interval_sec = max(float(download_cfg.get("request_interval_sec", 1.5)), 0.0)
     db_path = download_cfg.get("database", {}).get("path", "data/arxiv.db")
 
     conn = init_db(db_path)
@@ -260,6 +263,11 @@ def main():
             if bool(download_cfg.get("save_daily_json", True)):
                 out_file = save_daily_json(download_cfg.get("data_dir", "data"), day, papers, query)
                 print(f"[{day_str}] saved json: {out_file}")
+
+            is_last_day = i == lookback_days - 1
+            if not is_last_day and request_interval_sec > 0:
+                print(f"[{day_str}] waiting {request_interval_sec:.1f}s before next day request...")
+                time.sleep(request_interval_sec)
 
         print(
             "done, "
