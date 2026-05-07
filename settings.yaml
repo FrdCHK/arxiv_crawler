@@ -1,8 +1,8 @@
 arxiv:
   api_url: "http://export.arxiv.org/api/query"
   category: "astro-ph*"
-  max_results: 2000
-  user_agent: "arxiv auto bot (personal use; contact: zjd98@sina.cn)"
+  max_results: 1000
+  user_agent: "J. Zhang (personal use; GitHub repo: FrdCHK/arxiv_crawler)"
 
 download:
   # Rolling window size for backfill/review-delay robustness.
@@ -10,7 +10,7 @@ download:
   # Usually keep this as yesterday for cron.
   anchor_date_utc: "yesterday"
   # Wait time between requests for different UTC days.
-  request_interval_sec: 1.5
+  request_interval_sec: 5
 
   database:
     path: "data/arxiv.db"

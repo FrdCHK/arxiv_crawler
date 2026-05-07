@@ -13,13 +13,13 @@ DEFAULT_DOWNLOAD_SETTINGS = {
     "arxiv": {
         "api_url": "http://export.arxiv.org/api/query",
         "category": "astro-ph*",
-        "max_results": 2000,
+        "max_results": 1000,
         "user_agent": "arxiv crawler (research project; contact: your_email@example.com)",
     },
     "download": {
         "lookback_days": 4,
         "anchor_date_utc": "yesterday",
-        "request_interval_sec": 1.5,
+        "request_interval_sec": 5,
         "database": {
             "path": "data/arxiv.db",
         },
@@ -73,7 +73,7 @@ def fetch_arxiv_submitted_day(arxiv_cfg, target_date):
     params = {
         "search_query": query,
         "start": 0,
-        "max_results": int(arxiv_cfg.get("max_results", 2000)),
+        "max_results": int(arxiv_cfg.get("max_results", DEFAULT_DOWNLOAD_SETTINGS["arxiv"]["max_results"])),
         "sortBy": "submittedDate",
         "sortOrder": "ascending",
     }
