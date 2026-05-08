@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -47,6 +48,27 @@ DEFAULT_SETTINGS = {
     },
 }
 
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    log_dir = Path("log")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "screen_arxiv.log"
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
+
 
 def deep_update(base, updates):
     for key, value in updates.items():
@@ -72,6 +94,7 @@ def load_one_settings(path):
 
     if not settings["user"].get("name"):
         settings["user"]["name"] = p.stem
+    logger.info("Loaded settings: %s (user=%s)", p, settings["user"]["name"])
     return settings
 
 
@@ -133,7 +156,12 @@ def load_papers_from_db(db_path, recent_days):
         )
 
     label = f"{start_date.strftime('%Y-%m-%d')}..{now_utc_date.strftime('%Y-%m-%d')} UTC (by published)"
-    print(f"loaded papers from db: {db_file}, recent_days={recent_days}, count={len(papers)}")
+    logger.info(
+        "Loaded papers from db: db=%s recent_days=%s count=%s",
+        db_file,
+        recent_days,
+        len(papers),
+    )
     return papers, label
 
 
@@ -202,6 +230,13 @@ def score_papers_with_llm(papers, interest_text, settings):
 
     for start in range(0, len(papers), batch_size):
         batch = papers[start : start + batch_size]
+        logger.info(
+            "Scoring batch: start=%s size=%s total=%s model=%s",
+            start,
+            len(batch),
+            len(papers),
+            llm_cfg["model"],
+        )
         paper_inputs = [
             {"id": row["id"], "title": row["title"], "abstract": row.get("abstract", "")}
             for row in batch
@@ -233,13 +268,12 @@ def score_papers_with_llm(papers, interest_text, settings):
             with raw_log_file.open("a", encoding="utf-8") as f:
                 f.write(f"=== batch start: {start}, size: {len(batch)} ===\n")
                 f.write((content or "") + "\n\n")
-            print(f"logged raw LLM output for batch starting at {start} -> {raw_log_file}")
+            logger.info("Logged raw LLM output for batch start=%s -> %s", start, raw_log_file)
 
         scored_list = extract_json(content)
         if not scored_list:
-            print(f"warning: could not parse JSON for batch starting at {start}.")
-            print("raw output:")
-            print(content if content is not None else "")
+            logger.warning("Could not parse JSON for batch start=%s", start)
+            logger.info("Raw output: %s", content if content is not None else "")
             continue
 
         for item in scored_list:
@@ -251,7 +285,7 @@ def score_papers_with_llm(papers, interest_text, settings):
                     score_map[pid] = {"relevance_score": score, "reason": reason}
             except (KeyError, ValueError, TypeError):
                 continue
-        print(f"llm scored {min(start + batch_size, len(papers))}/{len(papers)} papers")
+        logger.info("LLM scored %s/%s papers", min(start + batch_size, len(papers)), len(papers))
         time.sleep(0.1)
 
     merged = []
@@ -305,7 +339,7 @@ def send_email(sender, receiver, html_content):
     smtp.login(sender["user"], sender["passwd"])
     smtp.sendmail(sender["user"], receiver, multi_part.as_string())
     smtp.quit()
-    print("send email success")
+    logger.info("Send email success to %s", receiver)
 
 
 def resolve_output_html_path(output_cfg, user_name):
@@ -320,6 +354,7 @@ def resolve_output_html_path(output_cfg, user_name):
 def run_for_settings_file(settings_path):
     settings = load_one_settings(settings_path)
     user_name = settings["user"]["name"]
+    logger.info("Start processing user settings: %s", user_name)
 
     db_path = settings["data"]["database"]["path"]
     recent_days = settings["data"].get("recent_days", 7)
@@ -331,7 +366,7 @@ def run_for_settings_file(settings_path):
         p for p in scored_papers if int(p.get("relevance_score", 0)) >= threshold
     ]
     selected_papers.sort(key=lambda p: (p["datetime"], p["relevance_score"]), reverse=True)
-    print(f"[{user_name}] selection success, selected={len(selected_papers)}")
+    logger.info("[%s] selection completed, selected=%s", user_name, len(selected_papers))
 
     html_msg = build_html(selected_papers, threshold, user_name, source_label)
 
@@ -339,19 +374,19 @@ def run_for_settings_file(settings_path):
     if output_cfg.get("save_html", False):
         html_path = resolve_output_html_path(output_cfg, user_name)
         html_path.write_text(html_msg, encoding="utf-8")
-        print(f"[{user_name}] saved html: {html_path}")
+        logger.info("[%s] saved html: %s", user_name, html_path)
 
     if output_cfg.get("send_email", False):
         receiver = str(output_cfg.get("email_address", "")).strip()
         if not receiver:
-            print(f"[{user_name}] error: output.email_address is required when send_email=true")
+            logger.error("[%s] output.email_address is required when send_email=true", user_name)
             return
         with open("account.json", "r", encoding="utf-8") as accf:
             acc = json.load(accf)
         try:
             send_email(acc["sender"], receiver, html_msg)
         except smtplib.SMTPException:
-            print(f"[{user_name}] error: email not sent!")
+            logger.exception("[%s] email not sent", user_name)
 
 
 def iter_settings_files(settings_dir="user_settings"):
@@ -372,14 +407,16 @@ def iter_settings_files(settings_dir="user_settings"):
 
 
 def main():
+    setup_logging()
+    logger.info("Starting screen_arxiv")
     settings_files = iter_settings_files("user_settings")
-    print(f"detected user settings files: {len(settings_files)}")
+    logger.info("Detected user settings files: %s", len(settings_files))
 
     for p in settings_files:
-        print(f"\n=== processing {p} ===")
+        logger.info("=== processing %s ===", p)
         run_for_settings_file(p)
 
-    print("\nfinished screening all users!")
+    logger.info("Finished screening all users")
 
 
 if __name__ == "__main__":

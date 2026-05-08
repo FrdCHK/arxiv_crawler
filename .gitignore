@@ -8,3 +8,4 @@ output/*
 llm_raw_output.log
 user_settings/*
 *.bat
+log/*
