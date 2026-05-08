@@ -6,11 +6,9 @@ arxiv:
 
 download:
   # Rolling window size for backfill/review-delay robustness.
-  lookback_days: 7
+  lookback_days: 5
   # Usually keep this as yesterday for cron.
   anchor_date_utc: "yesterday"
-  # Wait time between requests for different UTC days.
-  request_interval_sec: 5
   # Wait time before retrying a failed API request (including non-200 responses).
   retry_interval_sec: 60
   # 0 means retry forever; positive integer means max attempts.

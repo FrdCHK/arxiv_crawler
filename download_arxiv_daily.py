@@ -20,7 +20,6 @@ DEFAULT_DOWNLOAD_SETTINGS = {
     "download": {
         "lookback_days": 4,
         "anchor_date_utc": "yesterday",
-        "request_interval_sec": 5,
         "retry_interval_sec": 10,
         "max_retry_attempts": 0,
         "database": {
@@ -318,21 +317,17 @@ def main():
 
     lookback_days = max(int(download_cfg.get("lookback_days", 4)), 1)
     anchor_date = parse_anchor_date_utc(download_cfg.get("anchor_date_utc", "yesterday"))
-    request_interval_sec = max(float(download_cfg.get("request_interval_sec", 1.5)), 0.0)
     retry_interval_sec = max(float(download_cfg.get("retry_interval_sec", 10)), 0.0)
     max_retry_attempts = int(download_cfg.get("max_retry_attempts", 0))
     db_path = download_cfg.get("database", {}).get("path", "data/arxiv.db")
     logger.info(
-        "Loaded config: lookback_days=%s anchor_date=%s request_interval_sec=%.1f retry_interval_sec=%.1f max_retry_attempts=%s db=%s",
+        "Loaded config: lookback_days=%s anchor_date=%s retry_interval_sec=%.1f max_retry_attempts=%s db=%s",
         lookback_days,
         anchor_date,
-        request_interval_sec,
         retry_interval_sec,
         max_retry_attempts,
         db_path,
     )
-    if request_interval_sec > 0:
-        logger.info("request_interval_sec is ignored in single-request mode")
 
     conn = init_db(db_path)
     try:

@@ -24,14 +24,14 @@ arXiv visibility can lag submission (for example, Friday submissions may appear 
 `settings.yaml` controls:
 
 - arXiv API URL/category/max results/user-agent
-- rolling window size (`download.lookback_days`, default `4`)
+- rolling window size (`download.lookback_days`, default `5`)
 - anchor day (`download.anchor_date_utc`, usually `"yesterday"`)
 - SQLite path (`download.database.path`)
 - optional JSON snapshots (`download.save_daily_json`)
 
-The downloader queries each day in the window with:
+The downloader uses one range query per run:
 
-- `submittedDate:[YYYYMMDD0000 TO YYYYMMDD2359]`
+- `submittedDate:[start_day_0000 TO end_day_2359]`
 
 Database behavior:
 
