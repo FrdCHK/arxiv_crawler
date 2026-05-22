@@ -333,7 +333,7 @@ def send_email(sender, receiver, html_content):
     multi_part.attach(MIMEText(html_content, "html", "utf-8"))
     multi_part["From"] = sender["user"]
     multi_part["To"] = receiver
-    multi_part["Subject"] = Header("arXiv daily screening", "utf-8")
+    multi_part["Subject"] = Header("arXiv weekly screening", "utf-8")
 
     smtp = smtplib.SMTP_SSL(host=sender["server"], port=sender["port"])
     smtp.login(sender["user"], sender["passwd"])
